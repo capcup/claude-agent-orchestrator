@@ -1,50 +1,117 @@
 # Claude Code Orchestrator
 
-A reusable, robust, and deterministic Python wrapper around the "Claude Code" CLI.
+A headless, deterministic Python wrapper around the Claude Code CLI that autonomously plans, implements, and reviews code — task by task.
 
-## Paradigm
+## How it works
 
-- **Headless execution:** No interactive operation – the orchestrator is invoked entirely through scripts.
-- **Defensive programming:** Every step is guarded against crashes, hallucinations, and malformed LLM output.
-- **Absolute OS and Git safety:** The workspace state is checked before every step; atomic writes prevent corrupted state files.
-- **Persistence in Git:** Progress and state are stored under version control.
+The orchestrator runs a state machine with three steps per task:
 
-## Requirements
+1. **plan** — reads `NEW_PROJECT.md` and picks the next unfinished requirement as an atomic task
+2. **implement** — Claude writes the code directly into the target directory
+3. **review** — Claude reviews the diff; APPROVED commits the result, REJECTED feeds feedback back into the next implement attempt
 
-- Python 3.9+
-- Claude Code CLI (`claude`) installed on `PATH` and authenticated
-- Git installed
+`run.sh` drives this loop automatically for as many tasks as you specify.
 
-## Usage
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Python 3.9+ | standard library only, no pip installs needed |
+| [Claude Code CLI](https://claude.ai/code) | must be on `PATH` and authenticated (`claude --version` should work) |
+| Git | must be installed and on `PATH` |
+
+---
+
+## Quick start
+
+### 1. Clone this repo
 
 ```bash
-# Plan the next atomic task
-python orchestrator.py plan
-
-# Implement the task
-python orchestrator.py implement
-
-# Review the implementation
-python orchestrator.py review
+git clone <this-repo> claude-orchestrator
+cd claude-orchestrator
 ```
 
-## Workflow
+### 2. Describe your project
 
-The orchestrator runs as a state machine with three steps:
+Edit `NEW_PROJECT.md`. Replace the example content with:
 
-1. **plan** – Reads the requirements (`NEW_PROJECT.md`) and conventions (`CONVENTIONS.md`), determines the next atomic task, and persists the state.
-2. **implement** – Executes the planned task. Includes a circuit breaker (max. 15 iterations) and an automatic Git rollback after 3 failed attempts.
-3. **review** – Compiles the changed Python files, inspects the diff, and decides APPROVED/REJECTED. On success, `PROGRESS.md` is updated.
+- **Goal** — one or two sentences on what to build
+- **Tech constraints** — language, entry point file, style rules
+- **Requirements** — a checklist of atomic tasks, one per line
+
+Keep each requirement small enough to implement and review in a single cycle.
+
+### 3. Set the target directory
+
+Copy `.env.example` to `.env` and set where the generated code should be written:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+# .env
+TARGET_DIR=../my-new-project   # where Claude writes the code
+PYTHON=python3                 # optional: path to your Python interpreter
+```
+
+If `TARGET_DIR` is not set, the code is written into this repo's directory. The target directory is created automatically if it does not exist, and `git init` is run there if needed.
+
+### 4. Run
+
+```bash
+./run.sh [num_tasks] [max_rework_per_task]
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `num_tasks` | `1` | How many requirements to implement in sequence |
+| `max_rework_per_task` | `4` | Max implement/review cycles before giving up on a task |
+
+Examples:
+
+```bash
+./run.sh          # implement the next 1 task
+./run.sh 5        # implement the next 5 tasks
+./run.sh 5 6      # up to 6 rework cycles per task
+```
+
+Each approved task is automatically committed to the git repo in `TARGET_DIR`.
+
+---
 
 ## Configuration files
 
-| File | Purpose |
-|---|---|
-| `NEW_PROJECT.md` | Requirements and task description for the current project |
-| `CONVENTIONS.md` | Coding conventions appended to the LLM as a system prompt |
-| `PROGRESS.md` | Progress log – appended automatically on every APPROVED review |
-| `.agent_state.json` | Transient state between steps (not committed) |
+| File | Edit? | Purpose |
+|---|---|---|
+| `NEW_PROJECT.md` | **Yes** | Project requirements — define what to build here |
+| `CONVENTIONS.md` | Optional | Coding rules appended to Claude as a system prompt; reviewer checks the diff against them |
+| `.env` | **Yes** | Local paths and interpreter (`TARGET_DIR`, `PYTHON`) — gitignored |
+| `PROGRESS.md` | No | Auto-updated log of every approved task |
+| `.agent_state.json` | No | Transient state between steps — not committed |
 
-## Python standard library only
+---
 
-No external dependencies. Requires: `subprocess`, `json`, `os`, `sys`, `tempfile`, `re`.
+## Safety mechanisms
+
+- **Sterile workspace check** — `plan` refuses to run if the target directory has uncommitted changes
+- **Lint gate** — changed Python files must pass `py_compile` before a review starts
+- **Circuit breaker** — aborts after 15 total implement iterations to prevent infinite loops
+- **Auto rollback** — after 3 failed attempts on the same task, `git reset --hard` + `git clean -fd` resets the target directory
+- **Atomic state writes** — `.agent_state.json` is written via a temp file + rename to prevent corruption
+
+---
+
+## Manual step-by-step usage
+
+If you want to drive the steps yourself instead of using `run.sh`:
+
+```bash
+python orchestrator.py plan       # pick the next task
+python orchestrator.py implement  # write the code
+python orchestrator.py review     # approve or reject
+```
+
+Repeat `implement` / `review` until approved, then `git commit` in `TARGET_DIR`.

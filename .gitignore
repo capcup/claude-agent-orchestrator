@@ -1,3 +1,4 @@
+.env
 .agent_state.json*
 out.log
 err.log

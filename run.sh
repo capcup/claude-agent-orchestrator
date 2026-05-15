@@ -8,8 +8,9 @@
 #     num_tasks            how many atomic tasks to attempt (default: 1)
 #     max_rework_per_task  implement/review cycles before giving up (default: 4)
 #
-# Environment:
-#   PYTHON   interpreter to use (default: python)
+# Environment (set in .env or exported before calling):
+#   TARGET_DIR  directory where the project will be implemented (default: this repo)
+#   PYTHON      interpreter to use (default: python)
 #
 # Note: the orchestrator has no built-in "project finished" signal. The loop
 # stops after num_tasks, on a hard failure (circuit breaker / timeout / dirty
@@ -19,9 +20,14 @@
 
 set -u
 
+ORCH_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$ORCH_DIR/.env" ] && source "$ORCH_DIR/.env"
+
 PYTHON="${PYTHON:-python}"
-ORCH="orchestrator.py"
-STATE=".agent_state.json"
+ORCH="$ORCH_DIR/orchestrator.py"
+STATE="$ORCH_DIR/.agent_state.json"
+TARGET_DIR="${TARGET_DIR:-$ORCH_DIR}"
+export TARGET_DIR
 
 NUM_TASKS="${1:-1}"
 MAX_REWORK="${2:-4}"
@@ -29,9 +35,18 @@ MAX_REWORK="${2:-4}"
 die() { echo "run.sh: $*" >&2; exit 1; }
 
 command -v claude >/dev/null 2>&1 || die "'claude' CLI not found on PATH."
-[ -f "$ORCH" ]            || die "$ORCH not found — run this from the project repo."
-[ -f "NEW_PROJECT.md" ]   || die "NEW_PROJECT.md missing — describe the project first."
-git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository."
+[ -f "$ORCH" ]                    || die "$ORCH not found — run this from the project repo."
+[ -f "$ORCH_DIR/NEW_PROJECT.md" ] || die "NEW_PROJECT.md missing — describe the project first."
+git -C "$ORCH_DIR" rev-parse --git-dir >/dev/null 2>&1 || die "orchestrator is not in a git repository."
+
+# Ensure target directory exists and is a git repo.
+mkdir -p "$TARGET_DIR"
+if ! git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "run.sh: initialising git repo in $TARGET_DIR"
+  git -C "$TARGET_DIR" init || die "could not init git repo in $TARGET_DIR."
+fi
+
+echo "run.sh: target directory → $TARGET_DIR"
 
 for task in $(seq 1 "$NUM_TASKS"); do
   echo "=== Task $task/$NUM_TASKS: planning ==="
@@ -63,8 +78,8 @@ for task in $(seq 1 "$NUM_TASKS"); do
     die "task '${title:-?}' not approved within $MAX_REWORK cycles — stopping (changes left uncommitted for inspection)."
   fi
 
-  git add -A
-  git commit \
+  git -C "$TARGET_DIR" add -A
+  git -C "$TARGET_DIR" commit \
     -m "${title:-orchestrator task}" \
     -m "Implemented by orchestrator.py (Claude Code CLI)." \
     -m "Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>" \

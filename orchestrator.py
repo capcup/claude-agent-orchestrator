@@ -5,10 +5,13 @@ import sys
 import tempfile
 import re
 
-STATE_FILE = ".agent_state.json"
-CONVENTIONS_FILE = "CONVENTIONS.md"
-HISTORY_FILE = "PROGRESS.md"
-REQUIREMENTS_FILE = "NEW_PROJECT.md"
+ORCH_DIR = os.path.dirname(os.path.abspath(__file__))
+TARGET_DIR = os.path.abspath(os.environ.get("TARGET_DIR", ORCH_DIR))
+
+STATE_FILE = os.path.join(ORCH_DIR, ".agent_state.json")
+CONVENTIONS_FILE = os.path.join(ORCH_DIR, "CONVENTIONS.md")
+HISTORY_FILE = os.path.join(ORCH_DIR, "PROGRESS.md")
+REQUIREMENTS_FILE = os.path.join(ORCH_DIR, "NEW_PROJECT.md")
 
 
 def atomic_write_json(filepath: str, data: dict):
@@ -40,6 +43,7 @@ def ensure_sterile_workspace():
         ["git", "status", "--porcelain"],
         capture_output=True,
         text=True,
+        cwd=TARGET_DIR,
     )
     if result.stdout.strip():
         print(
@@ -50,16 +54,17 @@ def ensure_sterile_workspace():
 
 
 def rollback_workspace():
-    subprocess.run(["git", "reset", "--hard", "HEAD"])
-    subprocess.run(["git", "clean", "-fd"])
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=TARGET_DIR)
+    subprocess.run(["git", "clean", "-fd"], cwd=TARGET_DIR)
 
 
 def get_efficient_diff() -> str:
-    subprocess.run(["git", "add", "-N", "."])
+    subprocess.run(["git", "add", "-N", "."], cwd=TARGET_DIR)
     result = subprocess.run(
         ["git", "diff", "-M", "-U10"],
         capture_output=True,
         text=True,
+        cwd=TARGET_DIR,
     )
     return result.stdout
 
@@ -75,6 +80,7 @@ def get_changed_python_files() -> list:
         ["git", "status", "--porcelain"],
         capture_output=True,
         text=True,
+        cwd=TARGET_DIR,
     )
     files = []
     for line in result.stdout.splitlines():
@@ -83,8 +89,9 @@ def get_changed_python_files() -> list:
         if " -> " in path:  # rename/copy: "old -> new"
             path = path.split(" -> ", 1)[1]
         path = path.strip('"')
-        if path.endswith(".py") and os.path.isfile(path) and path not in files:
-            files.append(path)
+        abs_path = os.path.join(TARGET_DIR, path)
+        if path.endswith(".py") and os.path.isfile(abs_path) and abs_path not in files:
+            files.append(abs_path)
     return files
 
 
@@ -213,9 +220,12 @@ def step_implement():
     state["attempts"] = attempts
     state["total_iterations"] = total_iterations
 
+    os.chdir(TARGET_DIR)
+
     feedback = state.get("feedback", "")
     prompt = (
-        f"Fully implement the following task in the workspace:\n\n"
+        f"Fully implement the following task in the workspace.\n"
+        f"Working directory: {TARGET_DIR}\n\n"
         f"TITLE: {state.get('title', '')}\n"
         f"DESCRIPTION: {state.get('description', '')}\n\n"
         f"FEEDBACK FROM PREVIOUS REVIEW (if present, you MUST "
