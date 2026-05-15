@@ -11,5 +11,6 @@ diff against them — a violation is grounds for REJECTED.
 - Handle expected errors explicitly (missing file, bad input) with a clear message; never use bare `except:`.
 - No hardcoded absolute paths; build paths from arguments or the current directory.
 - Keep the diff minimal and scoped to the current task — no unrelated refactors or reformatting.
+- Never run global package installs (npm install -g, pip install --user, brew install, etc.); work only with project-local dependencies.
 - Comment only non-obvious decisions; do not restate what the code already says.
 - Follow PEP 8 (4-space indent, ≤ 100 columns).

@@ -1,5 +1,8 @@
 .env
 .agent_state.json*
+NEW_PROJECT.md
+CONVENTIONS.md
+PROGRESS.md
 out.log
 err.log
 __pycache__/

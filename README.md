@@ -35,11 +35,20 @@ cd claude-orchestrator
 
 ### 2. Describe your project
 
-Edit `NEW_PROJECT.md`. Replace the example content with:
+Copy the example files and fill them in:
+
+```bash
+cp NEW_PROJECT_EXAMPLE.md NEW_PROJECT.md
+cp CONVENTIONS_EXAMPLE.md CONVENTIONS.md
+```
+
+`NEW_PROJECT.md` is gitignored — it holds your project-specific spec. Edit it with:
 
 - **Goal** — one or two sentences on what to build
 - **Tech constraints** — language, entry point file, style rules
 - **Requirements** — a checklist of atomic tasks, one per line
+
+`CONVENTIONS.md` is also gitignored. Adjust the coding rules to match your stack; the reviewer checks every diff against them.
 
 Keep each requirement small enough to implement and review in a single cycle.
 
@@ -78,7 +87,7 @@ Then run it:
 | `num_tasks` | `1` | How many requirements to implement in sequence |
 | `max_rework_per_task` | `4` | Max implement/review cycles before giving up on a task |
 
-`run.sh` works through the requirements in `NEW_PROJECT.md` from top to bottom. It picks the next unchecked item, implements it, and commits it — then moves on to the next one.
+`run.sh` works through the requirements in `NEW_PROJECT.md` (gitignored, not this repo) from top to bottom. It picks the next unchecked item, implements it, and commits it — then moves on to the next one.
 
 **Example — implement the first requirement:**
 
@@ -105,19 +114,21 @@ All requested tasks done (1).
 
 If a task is rejected by the reviewer, `run.sh` automatically reruns `implement` with the reviewer's feedback until it is approved or the rework limit is reached. On approval, the result is committed to `TARGET_DIR` and the next task starts.
 
-If you run `./run.sh` again later, it picks up where it left off — the next unchecked requirement in `NEW_PROJECT.md`.
+If you run `./run.sh` again later, it picks up where it left off — the next unchecked requirement in your `NEW_PROJECT.md`.
 
 ---
 
 ## Configuration files
 
-| File | Edit? | Purpose |
-|---|---|---|
-| `NEW_PROJECT.md` | **Yes** | Project requirements — define what to build here |
-| `CONVENTIONS.md` | Optional | Coding rules appended to Claude as a system prompt; reviewer checks the diff against them |
-| `.env` | **Yes** | Local paths and interpreter (`TARGET_DIR`, `PYTHON`) — gitignored |
-| `PROGRESS.md` | No | Auto-updated log of every approved task |
-| `.agent_state.json` | No | Transient state between steps — not committed |
+| File | Edit? | Versioned? | Purpose |
+|---|---|---|---|
+| `NEW_PROJECT_EXAMPLE.md` | Template | Yes | Starter template — copy to `NEW_PROJECT.md` and fill in your spec |
+| `NEW_PROJECT.md` | **Yes** | No (gitignored) | Your project requirements — what to build |
+| `CONVENTIONS_EXAMPLE.md` | Template | Yes | Starter coding rules — copy to `CONVENTIONS.md` and adjust |
+| `CONVENTIONS.md` | Optional | No (gitignored) | Coding rules injected as system prompt; reviewer checks diffs against them |
+| `.env` | **Yes** | No (gitignored) | Local paths and interpreter (`TARGET_DIR`, `PYTHON`) |
+| `PROGRESS.md` | No | No (gitignored) | Auto-updated log of every approved task |
+| `.agent_state.json` | No | No (gitignored) | Transient state between steps |
 
 ---
 

@@ -36,7 +36,7 @@ die() { echo "run.sh: $*" >&2; exit 1; }
 
 command -v claude >/dev/null 2>&1 || die "'claude' CLI not found on PATH."
 [ -f "$ORCH" ]                    || die "$ORCH not found — run this from the project repo."
-[ -f "$ORCH_DIR/NEW_PROJECT.md" ] || die "NEW_PROJECT.md missing — describe the project first."
+[ -f "$ORCH_DIR/NEW_PROJECT.md" ] || die "NEW_PROJECT.md missing — copy NEW_PROJECT_EXAMPLE.md and fill in your project spec."
 git -C "$ORCH_DIR" rev-parse --git-dir >/dev/null 2>&1 || die "orchestrator is not in a git repository."
 
 # Ensure target directory exists and is a git repo.
