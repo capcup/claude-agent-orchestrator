@@ -127,3 +127,168 @@ def run_claude(
             )
 
     return None
+
+
+def get_recent_history(max_lines=15):
+    if not os.path.exists(HISTORY_FILE):
+        return ""
+    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    return "".join(lines[-max_lines:])
+
+
+def step_plan():
+    ensure_sterile_workspace()
+
+    history = get_recent_history()
+    prompt = (
+        f"Lies die Projektanforderungen in {REQUIREMENTS_FILE}.\n\n"
+        f"Bisheriger Fortschritt (letzte Eintraege):\n{history}\n\n"
+        f"Ermittle die naechste atomare Aufgabe. Antworte AUSSCHLIESSLICH in "
+        f'JSON: {{"title": "...", "description": "..."}}.'
+    )
+
+    result = run_claude(prompt, allowed_tools="Read", timeout=60)
+    if not result:
+        print("Planung fehlgeschlagen (kein valides Ergebnis).", file=sys.stderr)
+        sys.exit(1)
+
+    state = {
+        "title": result.get("title", ""),
+        "description": result.get("description", ""),
+        "status": "planned",
+        "attempts": 0,
+        "total_iterations": 0,
+        "feedback": "",
+    }
+    atomic_write_json(STATE_FILE, state)
+    print(f"Geplant: {state['title']}")
+
+
+def step_implement():
+    if not os.path.exists(STATE_FILE):
+        print("Kein State vorhanden. Zuerst 'plan' ausfuehren.", file=sys.stderr)
+        sys.exit(1)
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    total_iterations = state.get("total_iterations", 0)
+    if total_iterations > 15:
+        print(
+            "Circuit Breaker: total_iterations > 15. Abbruch.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    total_iterations += 1
+
+    attempts = state.get("attempts", 0) + 1
+    if attempts > 3:
+        rollback_workspace()
+        attempts = 1
+
+    state["attempts"] = attempts
+    state["total_iterations"] = total_iterations
+
+    feedback = state.get("feedback", "")
+    prompt = (
+        f"Setze folgende Aufgabe vollstaendig im Workspace um:\n\n"
+        f"TITEL: {state.get('title', '')}\n"
+        f"BESCHREIBUNG: {state.get('description', '')}\n\n"
+        f"FEEDBACK AUS VORHERIGEM REVIEW (falls vorhanden, zwingend "
+        f"beheben):\n{feedback}\n\n"
+        f"Implementiere die Aenderungen direkt."
+    )
+
+    result = run_claude(
+        prompt,
+        allowed_tools="Read,Edit,Bash",
+        requires_json=False,
+        skip_permissions=True,
+        timeout=400,
+    )
+
+    if result is None:
+        atomic_write_json(STATE_FILE, state)
+        print(
+            "Implement-Schritt fehlgeschlagen (Timeout). State persistiert.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    state["status"] = "needs_review"
+    atomic_write_json(STATE_FILE, state)
+    print("Implementierung abgeschlossen, bereit fuer Review.")
+
+
+def step_review():
+    if not os.path.exists(STATE_FILE):
+        print("Kein State vorhanden. Zuerst 'plan' ausfuehren.", file=sys.stderr)
+        sys.exit(1)
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    lint = subprocess.run(
+        ["python", "-m", "py_compile", "app.py"],
+        capture_output=True,
+        text=True,
+    )
+    if lint.returncode != 0:
+        state["status"] = "needs_rework"
+        state["feedback"] = f"py_compile fehlgeschlagen:\n{lint.stderr}"
+        atomic_write_json(STATE_FILE, state)
+        print("Lint fehlgeschlagen, Review abgebrochen.", file=sys.stderr)
+        return
+
+    diff = get_efficient_diff()
+    prompt = (
+        f"Pruefe den folgenden Git-Diff auf Korrektheit, Vollstaendigkeit "
+        f"und Einhaltung der Aufgabe.\n\n"
+        f"AUFGABE: {state.get('title', '')} - {state.get('description', '')}\n\n"
+        f"DIFF:\n{diff}\n\n"
+        f"Antworte AUSSCHLIESSLICH in JSON: "
+        f'{{"status": "APPROVED oder REJECTED", "feedback": "..."}}.'
+    )
+
+    result = run_claude(prompt, allowed_tools="Read", timeout=120)
+    if result is None:
+        print(
+            "Review fehlgeschlagen (Timeout/kein valides JSON).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    status = str(result.get("status", "")).strip().upper()
+    if status == "APPROVED":
+        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(
+                f"- {state.get('title', '')}: "
+                f"{state.get('description', '')}\n"
+            )
+        if os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
+        print("APPROVED. Aufgabe abgeschlossen.")
+    else:
+        state["status"] = "needs_rework"
+        state["feedback"] = result.get("feedback", "")
+        atomic_write_json(STATE_FILE, state)
+        print("REJECTED. Feedback gespeichert.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(
+            "Usage: python orchestrator.py [plan|implement|review]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    command = sys.argv[1]
+    if command == "plan":
+        step_plan()
+    elif command == "implement":
+        step_implement()
+    elif command == "review":
+        step_review()
+    else:
+        print(f"Unbekannter Befehl: {command}", file=sys.stderr)
+        sys.exit(1)
