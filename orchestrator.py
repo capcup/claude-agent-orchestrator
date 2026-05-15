@@ -33,3 +33,97 @@ def clean_json(raw_string: str) -> str:
     if match:
         return match.group(1).strip()
     return raw_string.strip()
+
+
+def ensure_sterile_workspace():
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        print(
+            "Workspace ist nicht sauber. Bitte committen/stashen.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def rollback_workspace():
+    subprocess.run(["git", "reset", "--hard", "HEAD"])
+    subprocess.run(["git", "clean", "-fd"])
+
+
+def get_efficient_diff() -> str:
+    subprocess.run(["git", "add", "-N", "."])
+    result = subprocess.run(
+        ["git", "diff", "-M", "-U10"],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def run_claude(
+    prompt,
+    allowed_tools=None,
+    requires_json=True,
+    skip_permissions=False,
+    max_retries=2,
+    timeout=120,
+):
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["TERM"] = "dumb"
+    env["CI"] = "1"
+    env["NONINTERACTIVE"] = "1"
+
+    current_prompt = prompt
+
+    for attempt in range(max_retries + 1):
+        cmd = ["claude", "-p", current_prompt]
+        if allowed_tools:
+            cmd += ["--allowedTools", allowed_tools]
+        if skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        if os.path.exists(CONVENTIONS_FILE):
+            cmd += ["--append-system-prompt-file", CONVENTIONS_FILE]
+        if requires_json:
+            cmd += ["--output-format", "json"]
+
+        with tempfile.TemporaryFile() as f_out, tempfile.TemporaryFile() as f_err:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=f_out,
+                    stderr=f_err,
+                    timeout=timeout,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                return None
+
+            f_out.seek(0)
+            f_err.seek(0)
+            stdout = f_out.read().decode("utf-8", errors="replace")
+            stderr = f_err.read().decode("utf-8", errors="replace")
+
+        if result.returncode != 0:
+            print(stderr, file=sys.stderr)
+            sys.exit(1)
+
+        if not requires_json:
+            return stdout
+
+        try:
+            return json.loads(clean_json(stdout))
+        except json.JSONDecodeError as e:
+            if attempt >= max_retries:
+                return None
+            current_prompt += (
+                f"\n\n[SYSTEM] Deine vorherige Antwort war kein valides JSON "
+                f"({e}). Antworte AUSSCHLIESSLICH mit einem validen "
+                f"JSON-Objekt. KÜRZER FASSEN!"
+            )
+
+    return None
