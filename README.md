@@ -61,6 +61,14 @@ If `TARGET_DIR` is not set, the code is written into this repo's directory. The 
 
 ### 4. Run
 
+Make the script executable (one-time):
+
+```bash
+chmod +x run.sh
+```
+
+Then run it:
+
 ```bash
 ./run.sh [num_tasks] [max_rework_per_task]
 ```
@@ -70,15 +78,34 @@ If `TARGET_DIR` is not set, the code is written into this repo's directory. The 
 | `num_tasks` | `1` | How many requirements to implement in sequence |
 | `max_rework_per_task` | `4` | Max implement/review cycles before giving up on a task |
 
-Examples:
+`run.sh` works through the requirements in `NEW_PROJECT.md` from top to bottom. It picks the next unchecked item, implements it, and commits it — then moves on to the next one.
+
+**Example — implement the first requirement:**
 
 ```bash
-./run.sh          # implement the next 1 task
-./run.sh 5        # implement the next 5 tasks
-./run.sh 5 6      # up to 6 rework cycles per task
+./run.sh
 ```
 
-Each approved task is automatically committed to the git repo in `TARGET_DIR`.
+```
+run.sh: target directory → ../my-new-project
+=== Task 1/1: planning ===
+Planned: Create todo.py with argparse CLI and add command
+--- attempt 1/4: implement ---
+--- attempt 1/4: review ---
+APPROVED. Task complete.
+=== Task 1 committed ===
+All requested tasks done (1).
+```
+
+**Example — implement the next 3 requirements in one go:**
+
+```bash
+./run.sh 3
+```
+
+If a task is rejected by the reviewer, `run.sh` automatically reruns `implement` with the reviewer's feedback until it is approved or the rework limit is reached. On approval, the result is committed to `TARGET_DIR` and the next task starts.
+
+If you run `./run.sh` again later, it picks up where it left off — the next unchecked requirement in `NEW_PROJECT.md`.
 
 ---
 
