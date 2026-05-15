@@ -7,8 +7,8 @@ import re
 
 STATE_FILE = ".agent_state.json"
 CONVENTIONS_FILE = "CONVENTIONS.md"
-HISTORY_FILE = "FORTSCHRITT.md"
-REQUIREMENTS_FILE = "NEUES_PROJEKT.md"
+HISTORY_FILE = "PROGRESS.md"
+REQUIREMENTS_FILE = "NEW_PROJECT.md"
 
 
 def atomic_write_json(filepath: str, data: dict):
@@ -43,7 +43,7 @@ def ensure_sterile_workspace():
     )
     if result.stdout.strip():
         print(
-            "Workspace ist nicht sauber. Bitte committen/stashen.",
+            "Workspace is not clean. Please commit/stash your changes.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -62,6 +62,30 @@ def get_efficient_diff() -> str:
         text=True,
     )
     return result.stdout
+
+
+def get_changed_python_files() -> list:
+    """Return the changed Python files the lint step must compile.
+
+    Covers staged, unstaged, and untracked changes. Renames resolve to
+    the new path; deleted files are excluded because they cannot be
+    compiled.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    files = []
+    for line in result.stdout.splitlines():
+        # Porcelain v1 format: 2 status chars + space + path.
+        path = line[3:].strip()
+        if " -> " in path:  # rename/copy: "old -> new"
+            path = path.split(" -> ", 1)[1]
+        path = path.strip('"')
+        if path.endswith(".py") and os.path.isfile(path) and path not in files:
+            files.append(path)
+    return files
 
 
 def run_claude(
@@ -121,9 +145,9 @@ def run_claude(
             if attempt >= max_retries:
                 return None
             current_prompt += (
-                f"\n\n[SYSTEM] Deine vorherige Antwort war kein valides JSON "
-                f"({e}). Antworte AUSSCHLIESSLICH mit einem validen "
-                f"JSON-Objekt. KÜRZER FASSEN!"
+                f"\n\n[SYSTEM] Your previous response was not valid JSON "
+                f"({e}). Respond with ONLY a valid JSON object. "
+                f"BE MORE CONCISE!"
             )
 
     return None
@@ -142,15 +166,15 @@ def step_plan():
 
     history = get_recent_history()
     prompt = (
-        f"Lies die Projektanforderungen in {REQUIREMENTS_FILE}.\n\n"
-        f"Bisheriger Fortschritt (letzte Eintraege):\n{history}\n\n"
-        f"Ermittle die naechste atomare Aufgabe. Antworte AUSSCHLIESSLICH in "
+        f"Read the project requirements in {REQUIREMENTS_FILE}.\n\n"
+        f"Progress so far (most recent entries):\n{history}\n\n"
+        f"Determine the next atomic task. Respond with ONLY "
         f'JSON: {{"title": "...", "description": "..."}}.'
     )
 
     result = run_claude(prompt, allowed_tools="Read", timeout=60)
     if not result:
-        print("Planung fehlgeschlagen (kein valides Ergebnis).", file=sys.stderr)
+        print("Planning failed (no valid result).", file=sys.stderr)
         sys.exit(1)
 
     state = {
@@ -162,12 +186,12 @@ def step_plan():
         "feedback": "",
     }
     atomic_write_json(STATE_FILE, state)
-    print(f"Geplant: {state['title']}")
+    print(f"Planned: {state['title']}")
 
 
 def step_implement():
     if not os.path.exists(STATE_FILE):
-        print("Kein State vorhanden. Zuerst 'plan' ausfuehren.", file=sys.stderr)
+        print("No state found. Run 'plan' first.", file=sys.stderr)
         sys.exit(1)
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -175,7 +199,7 @@ def step_implement():
     total_iterations = state.get("total_iterations", 0)
     if total_iterations > 15:
         print(
-            "Circuit Breaker: total_iterations > 15. Abbruch.",
+            "Circuit breaker: total_iterations > 15. Aborting.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -191,12 +215,12 @@ def step_implement():
 
     feedback = state.get("feedback", "")
     prompt = (
-        f"Setze folgende Aufgabe vollstaendig im Workspace um:\n\n"
-        f"TITEL: {state.get('title', '')}\n"
-        f"BESCHREIBUNG: {state.get('description', '')}\n\n"
-        f"FEEDBACK AUS VORHERIGEM REVIEW (falls vorhanden, zwingend "
-        f"beheben):\n{feedback}\n\n"
-        f"Implementiere die Aenderungen direkt."
+        f"Fully implement the following task in the workspace:\n\n"
+        f"TITLE: {state.get('title', '')}\n"
+        f"DESCRIPTION: {state.get('description', '')}\n\n"
+        f"FEEDBACK FROM PREVIOUS REVIEW (if present, you MUST "
+        f"address it):\n{feedback}\n\n"
+        f"Apply the changes directly."
     )
 
     result = run_claude(
@@ -210,49 +234,57 @@ def step_implement():
     if result is None:
         atomic_write_json(STATE_FILE, state)
         print(
-            "Implement-Schritt fehlgeschlagen (Timeout). State persistiert.",
+            "Implement step failed (timeout). State persisted.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     state["status"] = "needs_review"
     atomic_write_json(STATE_FILE, state)
-    print("Implementierung abgeschlossen, bereit fuer Review.")
+    print("Implementation complete, ready for review.")
 
 
 def step_review():
     if not os.path.exists(STATE_FILE):
-        print("Kein State vorhanden. Zuerst 'plan' ausfuehren.", file=sys.stderr)
+        print("No state found. Run 'plan' first.", file=sys.stderr)
         sys.exit(1)
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
-    lint = subprocess.run(
-        ["python", "-m", "py_compile", "app.py"],
-        capture_output=True,
-        text=True,
-    )
-    if lint.returncode != 0:
-        state["status"] = "needs_rework"
-        state["feedback"] = f"py_compile fehlgeschlagen:\n{lint.stderr}"
-        atomic_write_json(STATE_FILE, state)
-        print("Lint fehlgeschlagen, Review abgebrochen.", file=sys.stderr)
-        return
+    # Lint before review: compile the Python files that actually changed,
+    # using the running interpreter (sys.executable) rather than a bare
+    # "python", which may not be on PATH. No Python changes -> nothing to
+    # lint, which is not a failure.
+    py_files = get_changed_python_files()
+    if py_files:
+        lint = subprocess.run(
+            [sys.executable, "-m", "py_compile", *py_files],
+            capture_output=True,
+            text=True,
+        )
+        if lint.returncode != 0:
+            state["status"] = "needs_rework"
+            state["feedback"] = f"py_compile failed:\n{lint.stderr}"
+            atomic_write_json(STATE_FILE, state)
+            print("Lint failed, review aborted.", file=sys.stderr)
+            return
+    else:
+        print("No changed Python files to lint, skipping compile step.")
 
     diff = get_efficient_diff()
     prompt = (
-        f"Pruefe den folgenden Git-Diff auf Korrektheit, Vollstaendigkeit "
-        f"und Einhaltung der Aufgabe.\n\n"
-        f"AUFGABE: {state.get('title', '')} - {state.get('description', '')}\n\n"
+        f"Review the following Git diff for correctness, completeness, "
+        f"and adherence to the task.\n\n"
+        f"TASK: {state.get('title', '')} - {state.get('description', '')}\n\n"
         f"DIFF:\n{diff}\n\n"
-        f"Antworte AUSSCHLIESSLICH in JSON: "
-        f'{{"status": "APPROVED oder REJECTED", "feedback": "..."}}.'
+        f"Respond with ONLY JSON: "
+        f'{{"status": "APPROVED or REJECTED", "feedback": "..."}}.'
     )
 
     result = run_claude(prompt, allowed_tools="Read", timeout=120)
     if result is None:
         print(
-            "Review fehlgeschlagen (Timeout/kein valides JSON).",
+            "Review failed (timeout / no valid JSON).",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -266,12 +298,12 @@ def step_review():
             )
         if os.path.exists(STATE_FILE):
             os.remove(STATE_FILE)
-        print("APPROVED. Aufgabe abgeschlossen.")
+        print("APPROVED. Task complete.")
     else:
         state["status"] = "needs_rework"
         state["feedback"] = result.get("feedback", "")
         atomic_write_json(STATE_FILE, state)
-        print("REJECTED. Feedback gespeichert.")
+        print("REJECTED. Feedback saved.")
 
 
 if __name__ == "__main__":
@@ -290,5 +322,5 @@ if __name__ == "__main__":
     elif command == "review":
         step_review()
     else:
-        print(f"Unbekannter Befehl: {command}", file=sys.stderr)
+        print(f"Unknown command: {command}", file=sys.stderr)
         sys.exit(1)
