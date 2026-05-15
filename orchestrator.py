@@ -122,6 +122,17 @@ def run_claude(
         if requires_json:
             cmd += ["--output-format", "json"]
 
+        # Non-JSON steps (implement): stream directly to terminal so
+        # progress is visible and no output is lost on timeout.
+        if not requires_json:
+            try:
+                result = subprocess.run(cmd, timeout=timeout, env=env)
+            except subprocess.TimeoutExpired:
+                return None
+            if result.returncode != 0:
+                sys.exit(1)
+            return "ok"
+
         with tempfile.TemporaryFile() as f_out, tempfile.TemporaryFile() as f_err:
             try:
                 result = subprocess.run(
@@ -143,11 +154,16 @@ def run_claude(
             print(stderr, file=sys.stderr)
             sys.exit(1)
 
-        if not requires_json:
-            return stdout
-
         try:
-            return json.loads(clean_json(stdout))
+            # --output-format json wraps the response in a CLI envelope:
+            # {"type": "result", "result": "<actual text>", ...}
+            # Unwrap it before parsing the inner task JSON.
+            outer = json.loads(stdout)
+            if isinstance(outer, dict) and "result" in outer:
+                inner_text = outer["result"]
+            else:
+                inner_text = stdout
+            return json.loads(clean_json(inner_text))
         except json.JSONDecodeError as e:
             if attempt >= max_retries:
                 return None
@@ -224,10 +240,15 @@ def step_implement():
 
     feedback = state.get("feedback", "")
     prompt = (
-        f"Fully implement the following task in the workspace.\n"
+        f"Implement the following task — and ONLY this task — in the workspace.\n"
         f"Working directory: {TARGET_DIR}\n\n"
         f"TITLE: {state.get('title', '')}\n"
         f"DESCRIPTION: {state.get('description', '')}\n\n"
+        f"STRICT SCOPE — you MUST NOT:\n"
+        f"- Modify files unrelated to this task\n"
+        f"- Add features or abstractions not mentioned in the description\n"
+        f"- Refactor or clean up code outside the task's direct scope\n"
+        f"- Create files not directly required by this task\n\n"
         f"FEEDBACK FROM PREVIOUS REVIEW (if present, you MUST "
         f"address it):\n{feedback}\n\n"
         f"Apply the changes directly."
@@ -235,7 +256,7 @@ def step_implement():
 
     result = run_claude(
         prompt,
-        allowed_tools="Read,Edit,Bash",
+        allowed_tools="Read,Write,Edit,Bash",
         requires_json=False,
         skip_permissions=True,
         timeout=400,
@@ -283,10 +304,14 @@ def step_review():
 
     diff = get_efficient_diff()
     prompt = (
-        f"Review the following Git diff for correctness, completeness, "
-        f"and adherence to the task.\n\n"
+        f"Review the following Git diff strictly against the task below.\n\n"
         f"TASK: {state.get('title', '')} - {state.get('description', '')}\n\n"
         f"DIFF:\n{diff}\n\n"
+        f"REJECT if ANY of the following is true:\n"
+        f"- The diff is missing something required by the task description\n"
+        f"- The diff contains changes to files not required by this task\n"
+        f"- Extra features or abstractions were added beyond the description\n"
+        f"- Surrounding code was refactored without being asked\n\n"
         f"Respond with ONLY JSON: "
         f'{{"status": "APPROVED or REJECTED", "feedback": "..."}}.'
     )
