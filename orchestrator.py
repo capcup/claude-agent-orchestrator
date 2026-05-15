@@ -316,10 +316,23 @@ def step_review():
         print("REJECTED. Feedback saved.")
 
 
+def step_reset() -> None:
+    removed = []
+    for path in (STATE_FILE, HISTORY_FILE):
+        if os.path.exists(path):
+            os.remove(path)
+            removed.append(os.path.basename(path))
+    if removed:
+        print(f"Reset: removed {', '.join(removed)}.")
+    else:
+        print("Reset: nothing to remove (already clean).")
+    print("Next: update NEW_PROJECT.md, then run 'plan'.")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(
-            "Usage: python orchestrator.py [plan|implement|review]",
+            "Usage: python orchestrator.py [plan|implement|review|reset]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -331,6 +344,8 @@ if __name__ == "__main__":
         step_implement()
     elif command == "review":
         step_review()
+    elif command == "reset":
+        step_reset()
     else:
         print(f"Unknown command: {command}", file=sys.stderr)
         sys.exit(1)

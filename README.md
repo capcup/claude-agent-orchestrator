@@ -153,3 +153,15 @@ python orchestrator.py review     # approve or reject
 ```
 
 Repeat `implement` / `review` until approved, then `git commit` in `TARGET_DIR`.
+
+---
+
+## Starting a new project
+
+To reset the orchestrator state and begin with a different spec:
+
+```bash
+python orchestrator.py reset
+```
+
+This removes `.agent_state.json` and `PROGRESS.md`. Your code in `TARGET_DIR` is not touched. Afterwards, update `NEW_PROJECT.md` with the new spec and run `plan` again.
